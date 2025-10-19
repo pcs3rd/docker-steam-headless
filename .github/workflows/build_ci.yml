@@ -1,170 +1,61 @@
-name: Build and Deploy CI
+#
+name: Create and publish a Docker image on new release
 
+# Configures this workflow to run every time a change is pushed to the branch called `release`.
 on:
+  release:
+    types: [released]
   workflow_dispatch:
-  push:
-    branches: ['dev-**', 'pr-**', staging, master]
-    tags: ['**']
-  pull_request:
-    branches: [staging, master]
-  schedule:
-    # At 02:30 on Saturday
-    - cron: '30 2 * * 6'
 
+# Defines two custom environment variables for the workflow. These are used for the Container registry domain, and a name for the Docker image that this workflow builds.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
-  build_docker:
-    name: Build Docker Image
+  build-and-push-image:
     runs-on: ubuntu-latest
+    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        flavour: ['debian', 'arch']
-
+      attestations: write
+      id-token: write
+      #
     steps:
-      # ---
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # ---
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 #v3.8.0
-
-      # ---
-      - name: Prepare
-        if: success()
-        id: prepare
-        run: |
-          FLAVOUR=${{ matrix.flavour }}
-          echo  "FLAVOUR='${FLAVOUR}'"
-          echo  "GITHUB_REF='${GITHUB_REF}'"
-          echo  "GITHUB_REPOSITORY='${GITHUB_REPOSITORY}'"
-          VERSION_TAG=${GITHUB_REF#refs/*/}
-          SHA_SHORT="${GITHUB_SHA::7}"
-          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-          SERVICE_NAME=steam-headless
-          DOCKER_HUB_IMAGE=docker.io/josh5/${SERVICE_NAME:?}
-          GHCR_IMAGE=ghcr.io/${ORG:?}/${SERVICE_NAME:?}
-
-          DOCKER_TAGS=""
-          if [[ ${GITHUB_REF} == refs/heads/master ]]; then
-            if [[ ${FLAVOUR} == 'debian' ]]; then
-              DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:latest,${GHCR_IMAGE}:latest,${GHCR_IMAGE}:stable,"
-            fi
-            DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:${FLAVOUR},${GHCR_IMAGE}:${FLAVOUR},"
-          elif [[ ${GITHUB_REF} == refs/heads/staging ]]; then
-            DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:${FLAVOUR}-staging,${GHCR_IMAGE}:${FLAVOUR}-staging,"
-          elif [[ ${GITHUB_REF} == refs/heads/dev-* ]]; then
-            DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:${FLAVOUR}-${VERSION_TAG},${GHCR_IMAGE}:${FLAVOUR}-${VERSION_TAG},"
-          elif [[ ${GITHUB_REF} == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-            if [[ ${VERSION} =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}[-\w]*$ ]]; then
-              DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:${FLAVOUR}-${VERSION},${GHCR_IMAGE}:${FLAVOUR}-${VERSION},"
-              if [[ ${FLAVOUR} == 'debian' ]]; then
-                DOCKER_TAGS="${DOCKER_TAGS}${DOCKER_HUB_IMAGE}:latest,${GHCR_IMAGE}:latest,"
-              fi
-              
-            fi
-          elif [[ ${GITHUB_REF} == refs/pull/* ]]; then
-            PR_NUMBER=$(echo ${GITHUB_REF} | cut -d'/' -f3)
-            # For PR builds, only tag the GHCR image.
-            DOCKER_TAGS="${GHCR_IMAGE}:pr-${PR_NUMBER},"
-          fi
-          echo "DOCKER_TAGS='${DOCKER_TAGS}'"
-
-          echo "Build: [$(date +"%F %T")] [${GITHUB_REF_NAME}] [${GITHUB_SHA}] [${FLAVOUR}]" > ./overlay/version.txt
-
-          DOCKER_PUSH="true"
-          if [[ ${DOCKER_HUB_IMAGE} != 'docker.io/josh5/steam-headless' ]]; then
-            DOCKER_PUSH="false"
-          fi
-          if [[ ${VERSION_TAG%/merge} =~ "pr-"* ]]; then
-            DOCKER_PUSH="false"
-          fi
-          if [[ ${VERSION_TAG%/merge} =~ ^[0-9]+$ ]]; then
-            DOCKER_PUSH="false"
-          fi
-          if [[ "X${DOCKER_TAGS}" == "X" ]]; then
-            DOCKER_PUSH="false"
-          fi
-          echo "DOCKER_PUSH='${DOCKER_PUSH}'"
-          cat ./overlay/version.txt
-
-          echo "docker_hub_image:${DOCKER_HUB_IMAGE:?}"
-          echo "docker_hub_image=${DOCKER_HUB_IMAGE:?}" >> $GITHUB_OUTPUT
-
-          echo "ghcr_image:${GHCR_IMAGE:?}"
-          echo "ghcr_image=${GHCR_IMAGE:?}" >> $GITHUB_OUTPUT
-
-          echo "sha_short:${SHA_SHORT:?}"
-          echo "sha_short=${SHA_SHORT:?}" >> $GITHUB_OUTPUT
-
-          echo "service_name:${SERVICE_NAME:?}"
-          echo "service_name=${SERVICE_NAME:?}" >> $GITHUB_OUTPUT
-
-          echo "docker_image:${DOCKER_HUB_IMAGE:?}"
-          echo "docker_image=${DOCKER_HUB_IMAGE:?}" >> $GITHUB_OUTPUT
-
-          echo "docker_tags:$(echo ${DOCKER_TAGS} | sed 's/,$//')"
-          echo "docker_tags=$(echo ${DOCKER_TAGS} | sed 's/,$//')" >> $GITHUB_OUTPUT
-
-          echo "docker_push:${DOCKER_PUSH:?}"
-          echo "docker_push=${DOCKER_PUSH:?}" >> $GITHUB_OUTPUT
-
-          echo "docker_build_date:${BUILD_DATE:?}" 
-          echo "docker_build_date=${BUILD_DATE:?}" >> $GITHUB_OUTPUT
-
-          echo "docker_platforms=linux/amd64" >> $GITHUB_OUTPUT
-
-      # ---
-      - name: Log into GHCR registry
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+      # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # ---
-      - name: Log into Docker Hub registry
-        if: success() && (startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/'))
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # ---
-      - name: Docker meta
-        if: success()
+      # This step uses [docker/metadata-action](https://github.com/docker/metadata-action#about) to extract tags and labels that will be applied to the specified image. The `id` "meta" allows the output of this step to be referenced in a subsequent step. The `images` value provides the base name for the tags and labels.
+      - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@369eb591f429131d6889c46b94e711f089e6ca96 #v5.6.1
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: |
-            ${{ steps.prepare.outputs.docker_image }}
-          labels: |
-            maintainer=Josh.5
-            source.version=${{ steps.prepare.outputs.sha_short }}
-            source.project=Steam Headless
-            source.service=${{ steps.prepare.outputs.service_name }}
-            org.opencontainers.image.title=${{ steps.prepare.outputs.service_name }}
-            org.opencontainers.image.created=${{ steps.prepare.outputs.docker_build_date }}
-
-      # ---
-      - name: Build Image
-        if: success()
-        uses: docker/build-push-action@b32b51a8eda65d6793cd0494a773d4f6bcef32dc #v6.11.0
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      # This step uses the `docker/build-push-action` action to build the image, based on your repository's `Dockerfile`. If the build succeeds, it pushes the image to GitHub Packages.
+      # It uses the `context` parameter to define the build's context as the set of files located in the specified path. For more information, see [Usage](https://github.com/docker/build-push-action#usage) in the README of the `docker/build-push-action` repository.
+      # It uses the `tags` and `labels` parameters to tag and label the image with the output from the "meta" step.
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          file: Dockerfile.${{ matrix.flavour }}
-          platforms: ${{ steps.prepare.outputs.docker_platforms }}
-          pull: 'true'
-          push: ${{ steps.prepare.outputs.docker_push }}
-          tags: |
-            ${{ steps.prepare.outputs.docker_tags }}
-          labels: |
-            ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ steps.prepare.outputs.service_name }}-${{ matrix.flavour }}-main
-          cache-to: type=gha,scope=${{ steps.prepare.outputs.service_name }}-${{ matrix.flavour }}-main,mode=max
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      
+      # This step generates an artifact attestation for the image, which is an unforgeable statement about where and how it was built. It increases supply chain security for people who consume the image. For more information, see [Using artifact attestations to establish provenance for builds](/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      
