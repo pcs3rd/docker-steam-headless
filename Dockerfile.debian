@@ -85,6 +85,7 @@ RUN \
             wget \
             xmlstarlet \
             xz-utils \
+            avahi-utils\
     && \
     echo "**** Install python ****" \
         && apt-get install -y --no-install-recommends \
